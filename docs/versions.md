@@ -94,34 +94,88 @@ tools = await mc.get_tools()  # includes contacts_list
 `create_deep_agent(..., interrupt_on={...}, checkpointer=...)` adds langchain's `HumanInTheLoopMiddleware` in the default
 `batched` mode (deepagents does not pass `interrupt_mode`). A checkpointer is required.
 
+- Detecting the pause while streaming: with `stream_mode="updates"` a chunk `{"__interrupt__": (Interrupt, ...)}` arrives and the
+  stream then ends. `chunk["__interrupt__"][0].value` is `{"action_requests": [{"name", "args", "description"}], "review_configs": [...]}`.
+- After the stream, `await agent.aget_state(config)` also shows it: `state.interrupts` holds the same values and `state.next` is
+  `("HumanInTheLoopMiddleware.after_model",)`.
+- Resume with `Command(resume={"decisions": [...]})`, one decision per action request in the same order: `{"type": "approve"}` or
+  `{"type": "reject", "message": "..."}` (message optional, returned to the model). `edit` and `respond` also exist when listed in
+  `allowed_decisions`. Source: `langchain/agents/middleware/human_in_the_loop.py`.
+
+Verified snippet (scripted model and fake tool, no API key). Run it as a throwaway script:
+
 ```python
+import asyncio
+
+from deepagents import create_deep_agent
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage
+from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-agent = create_deep_agent(
-    model,
-    tools=tools,
-    interrupt_on={"deals_delete": {"allowed_decisions": ["approve", "reject"]}},  # or True
-    checkpointer=InMemorySaver(),
-)
-config = {"configurable": {"thread_id": "t1"}, "recursion_limit": 100}
+CALLS = []
+
+
+@tool
+def deals_delete(deal_id: str) -> str:
+    """Delete a deal."""
+    CALLS.append(deal_id)
+    return f"deleted {deal_id}"
+
+
+class ScriptedModel(GenericFakeChatModel):
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+
+def make_agent():
+    call = {"name": "deals_delete", "args": {"deal_id": "d1"}, "id": "c1"}
+    msgs = iter([AIMessage(content="", tool_calls=[call]), AIMessage(content="done")])
+    return create_deep_agent(
+        ScriptedModel(messages=msgs),
+        tools=[deals_delete],
+        interrupt_on={"deals_delete": {"allowed_decisions": ["approve", "reject"]}},
+        checkpointer=InMemorySaver(),
+    )
+
+
+async def run(decision):
+    agent = make_agent()
+    config = {"configurable": {"thread_id": f"t-{decision['type']}"}, "recursion_limit": 100}
+    inp = {"messages": [{"role": "user", "content": "delete d1"}]}
+    async for chunk in agent.astream(inp, config, stream_mode="updates"):
+        if "__interrupt__" in chunk:
+            reqs = chunk["__interrupt__"][0].value["action_requests"]
+            print("PAUSED", [{"name": r["name"], "args": r["args"]} for r in reqs])
+    state = await agent.aget_state(config)
+    print("PENDING", [i.value["action_requests"][0]["name"] for i in state.interrupts], state.next)
+    async for chunk in agent.astream(
+        Command(resume={"decisions": [decision]}), config, stream_mode="updates"
+    ):
+        for node, upd in chunk.items():
+            if node == "tools":
+                print("TOOL RESULT", upd["messages"][0].content)
+    print("tool calls executed:", CALLS)
+
+
+async def main():
+    await run({"type": "approve"})
+    CALLS.clear()
+    await run({"type": "reject", "message": "Not allowed."})
+
+
+asyncio.run(main())
 ```
 
-The pause is a LangGraph interrupt. Its value is one request per model turn:
+Output:
 
-```python
-{"action_requests": [{"name": "deals_delete", "args": {...}, "description": "..."}],
- "review_configs": [{"action_name": "deals_delete", "allowed_decisions": ["approve", "reject"]}]}
+```text
+PAUSED [{'name': 'deals_delete', 'args': {'deal_id': 'd1'}}]
+PENDING ['deals_delete'] ('HumanInTheLoopMiddleware.after_model',)
+TOOL RESULT deleted d1
+tool calls executed: ['d1']
+PAUSED [{'name': 'deals_delete', 'args': {'deal_id': 'd1'}}]
+PENDING ['deals_delete'] ('HumanInTheLoopMiddleware.after_model',)
+tool calls executed: []
 ```
-
-Resume with one decision per action request, in the same order:
-
-```python
-# approve
-agent.astream(Command(resume={"decisions": [{"type": "approve"}]}), config)
-# reject (message is optional and is returned to the model)
-agent.astream(Command(resume={"decisions": [{"type": "reject", "message": "Not allowed."}]}), config)
-```
-
-Other decision types: `edit` (with edited `args`) and `respond` (with `message`), when listed in `allowed_decisions`.
-Source: `langchain/agents/middleware/human_in_the_loop.py`.
