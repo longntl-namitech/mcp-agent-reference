@@ -1,3 +1,6 @@
+import asyncio
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from mock_crm.app import create_app
@@ -122,3 +125,21 @@ def test_admin_reset_flag(db_path, monkeypatch):
     on.delete(f"/contacts/{on.get('/contacts').json()[0]['id']}")
     assert on.post("/admin/reset").status_code == 200
     assert count(on, "contacts") == before
+
+
+async def test_concurrent_requests(db_path):
+    app = create_app(db_path)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t", headers=ALICE) as ac:
+        results = await asyncio.gather(*[ac.get("/contacts") for _ in range(60)])
+    assert [r.status_code for r in results] == [200] * 60
+
+
+async def test_write_visible_immediately(db_path):
+    app = create_app(db_path)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t", headers=ALICE) as ac:
+        for i in range(20):
+            created = await ac.post("/contacts", json={"name": f"Fresh {i}"})
+            got = await ac.get(f"/contacts/{created.json()['id']}")
+            assert got.status_code == 200

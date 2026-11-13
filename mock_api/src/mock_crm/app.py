@@ -57,7 +57,7 @@ def _crud_router(entity, create_model, patch_model, filters, conn_dep) -> APIRou
         request: Request,
         limit: int = Query(50, ge=1, le=200),
         offset: int = Query(0, ge=0),
-        conn: sqlite3.Connection = Depends(conn_dep),
+        conn: sqlite3.Connection = Depends(conn_dep, scope="function"),
     ):
         where, params = [], []
         for name in filters:
@@ -80,11 +80,13 @@ def _crud_router(entity, create_model, patch_model, filters, conn_dep) -> APIRou
         return [_row(r, entity) for r in rows]
 
     @router.get("/{item_id}")
-    def get_item(item_id: int, conn: sqlite3.Connection = Depends(conn_dep)):
+    def get_item(item_id: int, conn: sqlite3.Connection = Depends(conn_dep, scope="function")):
         return _row(_get_or_404(conn, entity, item_id), entity)
 
     @router.post("", status_code=201)
-    def create_item(body: create_model, conn: sqlite3.Connection = Depends(conn_dep)):  # type: ignore[valid-type]
+    def create_item(
+        body: create_model, conn: sqlite3.Connection = Depends(conn_dep, scope="function")
+    ):  # type: ignore[valid-type]
         data = _values(body, entity)
         if entity == "notes" and data.get("created_at") is None:
             data["created_at"] = datetime.now().isoformat(timespec="seconds")
@@ -100,7 +102,7 @@ def _crud_router(entity, create_model, patch_model, filters, conn_dep) -> APIRou
     def patch_item(
         item_id: int,
         body: patch_model,  # type: ignore[valid-type]
-        conn: sqlite3.Connection = Depends(conn_dep),
+        conn: sqlite3.Connection = Depends(conn_dep, scope="function"),
     ):
         _get_or_404(conn, entity, item_id)
         data = body.model_dump(exclude_unset=True)
@@ -112,7 +114,7 @@ def _crud_router(entity, create_model, patch_model, filters, conn_dep) -> APIRou
         return _row(_get_or_404(conn, entity, item_id), entity)
 
     @router.delete("/{item_id}", status_code=204)
-    def delete_item(item_id: int, conn: sqlite3.Connection = Depends(conn_dep)):
+    def delete_item(item_id: int, conn: sqlite3.Connection = Depends(conn_dep, scope="function")):
         _get_or_404(conn, entity, item_id)
         conn.execute(f"DELETE FROM {entity} WHERE id = ?", (item_id,))
         return Response(status_code=204)
@@ -135,7 +137,9 @@ def create_app(db_path: str) -> FastAPI:
 
     # Domain routes are registered before the CRUD routers so "/contacts/merge" is explicit.
     @authed.post("/contacts/merge")
-    def merge_contacts(body: s.MergeIn, conn: sqlite3.Connection = Depends(conn_dep)):
+    def merge_contacts(
+        body: s.MergeIn, conn: sqlite3.Connection = Depends(conn_dep, scope="function")
+    ):
         if body.keep_id == body.merge_id:
             raise HTTPException(status_code=409, detail="Cannot merge a contact into itself")
         _get_or_404(conn, "contacts", body.keep_id)
@@ -149,13 +153,19 @@ def create_app(db_path: str) -> FastAPI:
         return _row(_get_or_404(conn, "contacts", body.keep_id), "contacts")
 
     @authed.post("/deals/{deal_id}/stage")
-    def move_stage(deal_id: int, body: s.StageIn, conn: sqlite3.Connection = Depends(conn_dep)):
+    def move_stage(
+        deal_id: int,
+        body: s.StageIn,
+        conn: sqlite3.Connection = Depends(conn_dep, scope="function"),
+    ):
         _get_or_404(conn, "deals", deal_id)
         conn.execute("UPDATE deals SET stage = ? WHERE id = ?", (body.stage, deal_id))
         return _row(_get_or_404(conn, "deals", deal_id), "deals")
 
     @authed.get("/companies/{company_id}/activities")
-    def company_activities(company_id: int, conn: sqlite3.Connection = Depends(conn_dep)):
+    def company_activities(
+        company_id: int, conn: sqlite3.Connection = Depends(conn_dep, scope="function")
+    ):
         _get_or_404(conn, "companies", company_id)
         contact_ids = "SELECT id FROM contacts WHERE company_id = :c"
         notes = conn.execute(
