@@ -69,3 +69,9 @@ async def test_skills_read_only():
     out = await agent.ainvoke({"messages": [{"role": "user", "content": "write"}]}, _cfg("s"))
     tool_msgs = [m for m in out["messages"] if m.type == "tool"]
     assert "permission" in tool_msgs[0].content.lower()
+
+
+def test_researcher_prompt_has_no_search_tools():
+    from crm_agent.prompts import RESEARCHER_PROMPT
+
+    assert "search_tools" not in RESEARCHER_PROMPT

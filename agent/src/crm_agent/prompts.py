@@ -14,6 +14,6 @@ user to approve. Say what you intend to change and why before you call a write t
 - Never invent records. If the data does not show something, say so.
 """
 
-RESEARCHER_PROMPT = """You are a read-only CRM researcher. Use `search_tools` to find the \
-tools you need, gather the facts the task asks for, and reply with a compact summary. List what \
-you could not find. You cannot change data."""
+RESEARCHER_PROMPT = """You are a read-only CRM researcher. The CRM read tools are available to you \
+directly. Gather the facts the task asks for and reply with a compact summary. List what you could \
+not find. You cannot change data."""
