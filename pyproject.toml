@@ -11,10 +11,11 @@ dependencies = []
 members = ["mock_api", "gateway", "agent"]
 
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "ruff"]
+dev = ["httpx", "pytest", "pytest-asyncio", "ruff"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = ["es: needs a running Elasticsearch (ES_URL)"]
 testpaths = ["tests", "mock_api/tests", "gateway/tests", "agent/tests"]
 
 [tool.ruff]

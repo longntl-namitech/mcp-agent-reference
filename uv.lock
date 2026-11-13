@@ -1766,6 +1766,7 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -1775,6 +1776,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
