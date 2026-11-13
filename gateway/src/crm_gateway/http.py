@@ -40,7 +40,12 @@ class ApiClient:
             return _error(resp.status_code, method, url, f"HTTP {resp.status_code}", _body(resp))
         if resp.status_code == 204 or not resp.content:
             return {"ok": True}
-        return resp.json()
+        try:
+            return resp.json()
+        except (jsonlib.JSONDecodeError, UnicodeDecodeError):
+            return _error(
+                resp.status_code, method, url, "Response body is not valid JSON", _body(resp)
+            )
 
 
 def _body(resp: httpx.Response):

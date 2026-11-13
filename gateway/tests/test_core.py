@@ -9,7 +9,7 @@ from crm_gateway.auth import SharedSecretVerifier
 from crm_gateway.headers import user_token
 from crm_gateway.http import ApiClient, is_error
 from crm_gateway.server import create_gateway
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 from fastmcp.client.transports import StreamableHttpTransport
 from mock_crm.app import create_app
 
@@ -61,6 +61,16 @@ async def test_network_error():
     assert result["statusCode"] is None
 
 
+async def test_2xx_non_json_body_is_error():
+    result = await api(lambda r: httpx.Response(200, text="<html>oops</html>")).request(
+        "GET", "/contacts", token="t"
+    )
+    assert is_error(result)
+    assert set(result) == ERROR_KEYS
+    assert result["statusCode"] == 200
+    assert result["responseBody"] == "<html>oops</html>"
+
+
 def test_is_error():
     assert is_error({"error": True})
     assert not is_error({"id": 1})
@@ -73,18 +83,19 @@ async def test_verifier():
     assert await verifier.verify_token("wrong") is None
 
 
-def add_probe_tool(gateway, calls):
-    @gateway.tool
+def build_probe(client: ApiClient) -> FastMCP:
+    mcp = FastMCP("probe")
+
+    @mcp.tool(name="call")
     async def probe() -> dict:
         """Call the API with the caller's token."""
         token = user_token()
         if isinstance(token, dict):
             return token
-        result = await gateway.api.request("GET", "/ping", token=token)
-        calls.append(result)
+        result = await client.request("GET", "/ping", token=token)
         return result if isinstance(result, dict) else {"items": result}
 
-    return probe
+    return mcp
 
 
 SEEN: list[str] = []
@@ -101,10 +112,9 @@ gateway_api = api(_record)
 @pytest.fixture
 async def http_gateway():
     """Gateway served over real streamable HTTP on a free port."""
-    calls: list = []
     SEEN.clear()
     gateway = create_gateway("http://api.test", "s3cret-x", http_client=gateway_api._client)
-    add_probe_tool(gateway, calls)
+    gateway.mount(build_probe(gateway_api), namespace="probe")
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
@@ -115,7 +125,7 @@ async def http_gateway():
     task = asyncio.create_task(server.serve())
     while not server.started:
         await asyncio.sleep(0.01)
-    yield f"http://127.0.0.1:{port}", calls
+    yield f"http://127.0.0.1:{port}"
     server.should_exit = True
     await task
 
@@ -128,13 +138,13 @@ def http_client(base: str, secret: str, token: str | None = None) -> Client:
 
 
 async def test_health(http_gateway):
-    base, _ = http_gateway
+    base = http_gateway
     async with httpx.AsyncClient() as client:
         assert (await client.get(f"{base}/health")).status_code == 200
 
 
 async def test_secret_required(http_gateway):
-    base, _ = http_gateway
+    base = http_gateway
     async with httpx.AsyncClient() as client:
         resp = await client.post(f"{base}/mcp", json={})
         assert resp.status_code == 401
@@ -143,17 +153,17 @@ async def test_secret_required(http_gateway):
 
 
 async def test_token_reaches_api(http_gateway):
-    base, calls = http_gateway
+    base = http_gateway
     async with http_client(base, "s3cret-x", "tok-y") as client:
-        result = await client.call_tool("probe", {})
+        result = await client.call_tool("probe_call", {})
     assert result.data == {"ok": True}
     assert SEEN == ["Bearer tok-y"]
 
 
 async def test_missing_access_token(http_gateway):
-    base, _ = http_gateway
+    base = http_gateway
     async with http_client(base, "s3cret-x") as client:
-        result = await client.call_tool("probe", {})
+        result = await client.call_tool("probe_call", {})
     assert result.data["message"] == "missing access-token header"
     assert result.data["statusCode"] is None
 
@@ -174,10 +184,23 @@ async def test_against_mock_api(tmp_path):
 
 
 async def test_no_secrets_in_logs(http_gateway, caplog):
-    base, _ = http_gateway
+    base = http_gateway
     with caplog.at_level(logging.DEBUG):
         async with http_client(base, "s3cret-x", "tok-y") as client:
-            await client.call_tool("probe", {})
-    assert "probe" in caplog.text  # middleware logged something
+            await client.call_tool("probe_call", {})
+    assert "probe_call" in caplog.text  # middleware logged something
     assert "s3cret-x" not in caplog.text
     assert "tok-y" not in caplog.text
+
+
+async def test_middleware_logs_error_status_for_error_dict(http_gateway, caplog):
+    base = http_gateway
+    with caplog.at_level(logging.INFO, logger="crm_gateway"):
+        async with http_client(base, "s3cret-x") as client:  # no access-token -> error dict
+            await client.call_tool("probe_call", {})
+        assert "tool=probe_call" in caplog.text
+        assert "status=error" in caplog.text
+        caplog.clear()
+        async with http_client(base, "s3cret-x", "tok-y") as client:
+            await client.call_tool("probe_call", {})
+    assert "status=ok" in caplog.text

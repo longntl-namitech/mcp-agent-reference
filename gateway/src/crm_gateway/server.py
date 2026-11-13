@@ -8,6 +8,7 @@ from starlette.responses import JSONResponse
 from .auth import SharedSecretVerifier
 from .http import ApiClient
 from .middleware import ToolLogMiddleware
+from .tools import SUBSERVERS
 
 
 def create_gateway(
@@ -15,7 +16,9 @@ def create_gateway(
 ) -> FastMCP:
     gateway = FastMCP("crm-gateway", auth=SharedSecretVerifier(secret))
     gateway.add_middleware(ToolLogMiddleware())
-    gateway.api = ApiClient(api_base_url, client=http_client)  # type: ignore[attr-defined]
+    api = ApiClient(api_base_url, client=http_client)
+    for namespace, build in SUBSERVERS.items():
+        gateway.mount(build(api), namespace=namespace)
 
     @gateway.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> JSONResponse:
