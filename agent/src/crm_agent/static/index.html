@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CRM agent playground</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<style>
+  :root { --bg: #fff; --fg: #1a1a1a; --muted: #666; --line: #d8d8d8; --card: #f6f6f6; --accent: #2457c5; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #16181d; --fg: #e8e8e8; --muted: #9aa0aa; --line: #333840; --card: #1f2229; --accent: #7aa2f7; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 16px; display: grid; gap: 12px; }
+  h1 { font-size: 1.2rem; margin: 0; }
+  h2 { font-size: 0.8rem; margin: 0 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row label { flex: 1 1 240px; display: grid; gap: 2px; font-size: 0.85rem; color: var(--muted); }
+  input, textarea, button { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  textarea { width: 100%; min-height: 70px; resize: vertical; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .pane { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--card); }
+  pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 13px/1.4 ui-monospace, monospace; }
+  #answer { min-height: 60px; }
+  #think pre { color: var(--muted); }
+  #interrupt { border-color: var(--accent); }
+  [hidden] { display: none !important; }
+  details summary { cursor: pointer; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>CRM agent playground</h1>
+  <div class="row">
+    <label>Access token <input id="token" value="demo-token-alice" autocomplete="off"></label>
+    <label>Thread id <span class="row"><input id="thread" style="flex:1"><button id="newThread" type="button">New thread</button></span></label>
+  </div>
+  <div>
+    <textarea id="message" placeholder="Ask about contacts, deals, tasks... (Ctrl+Enter to send)"></textarea>
+    <button id="send" class="primary" type="button">Send</button>
+  </div>
+  <section class="pane" id="interrupt" hidden>
+    <h2>Approval needed</h2>
+    <pre id="calls"></pre>
+    <div class="row" style="margin-top:8px">
+      <button id="approve" class="primary" type="button">Approve</button>
+      <button id="reject" type="button">Reject</button>
+    </div>
+  </section>
+  <section class="pane" id="planBox" hidden><h2>Plan</h2><pre id="plan"></pre></section>
+  <section class="pane"><h2>Answer</h2><div id="answer"></div></section>
+  <section class="pane" id="think" hidden><h2>Subagent thinking</h2><pre id="thinkText"></pre></section>
+  <details class="pane"><summary>Raw events</summary><pre id="log"></pre></details>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const newId = () => "t-" + Math.random().toString(36).slice(2, 10);
+let answer = "";
+let busy = false;
+
+$("thread").value = newId();
+$("newThread").onclick = () => { $("thread").value = newId(); clearPanes(); };
+
+function clearPanes() {
+  answer = "";
+  $("answer").textContent = "";
+  $("thinkText").textContent = "";
+  $("think").hidden = true;
+  $("plan").textContent = "";
+  $("planBox").hidden = true;
+  $("interrupt").hidden = true;
+  $("log").textContent = "";
+}
+
+function setBusy(value) {
+  busy = value;
+  for (const id of ["send", "approve", "reject"]) $(id).disabled = value;
+}
+
+function render() {
+  if (window.marked) $("answer").innerHTML = marked.parse(answer);
+  else $("answer").textContent = answer;
+}
+
+function handle(event) {
+  $("log").textContent += JSON.stringify(event) + "\n";
+  const { type, content } = event;
+  if (type === "token") { answer += content; render(); }
+  else if (type === "think") { $("think").hidden = false; $("thinkText").textContent += content; }
+  else if (type === "plan") { $("planBox").hidden = false; $("plan").textContent = content; }
+  else if (type === "interrupt") {
+    const calls = JSON.parse(content);
+    $("calls").textContent = calls.map((c) => c.name + "\n" + JSON.stringify(c.args, null, 2)).join("\n\n");
+    $("interrupt").hidden = false;
+  } else if (type === "error") { answer += "\n\n**Error:** " + content; render(); }
+}
+
+async function post(body) {
+  setBusy(true);
+  $("interrupt").hidden = true;
+  try {
+    const resp = await fetch("/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + $("token").value.trim() },
+      body: JSON.stringify({ thread_id: $("thread").value, ...body }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      handle({ type: "error", content: "HTTP " + resp.status + ": " + (err.detail || resp.statusText) });
+      return;
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (const line of lines) if (line.trim()) handle(JSON.parse(line));
+    }
+  } catch (exc) {
+    handle({ type: "error", content: String(exc) });
+  } finally {
+    setBusy(false);
+  }
+}
+
+function send() {
+  const message = $("message").value.trim();
+  if (!message || busy) return;
+  $("message").value = "";
+  answer += (answer ? "\n\n---\n\n" : "") + "**You:** " + message + "\n\n";
+  render();
+  post({ message });
+}
+
+$("send").onclick = send;
+$("message").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send(); });
+$("approve").onclick = () => post({ resume: { decision: "approve" } });
+$("reject").onclick = () => post({ resume: { decision: "reject", message: "Rejected by the user." } });
+</script>
+</body>
+</html>

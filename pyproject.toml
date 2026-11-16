@@ -1,0 +1,37 @@
+[project]
+name = "mcp-agent-reference"
+version = "0.1.0"
+description = "Reference monorepo: mock CRM API, FastMCP gateway, deepagents agent"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["mock_api", "gateway", "agent"]
+
+[dependency-groups]
+dev = ["httpx", "pytest", "pytest-asyncio", "ruff"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["agent/tests"]
+markers = ["es: needs a running Elasticsearch (ES_URL)"]
+testpaths = ["tests", "mock_api/tests", "gateway/tests", "agent/tests"]
+
+[tool.ruff]
+extend-exclude = ["docs"]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/test_imports.py" = ["E401", "I001"]
+
+[tool.ruff.format]
+exclude = ["tests/test_imports.py"]
