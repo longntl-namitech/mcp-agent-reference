@@ -179,3 +179,14 @@ PAUSED [{'name': 'deals_delete', 'args': {'deal_id': 'd1'}}]
 PENDING ['deals_delete'] ('HumanInTheLoopMiddleware.after_model',)
 tool calls executed: []
 ```
+
+## Running the tests
+
+`uv sync --all-packages --all-extras` installs the dev group too. If `uv run pytest` fails with "Failed to spawn: pytest" after the
+repo folder was moved, the old `.venv` has stale script shebangs: delete `.venv` and sync again.
+
+## MCP session and tasks
+
+`MultiServerMCPClient.session()` uses anyio cancel scopes. Entering it in the request handler and closing it from the streaming
+response fails with "Attempted to exit cancel scope in a different task". `crm_agent.app._open_in_task` enters and closes it from one
+task. `tests/test_e2e_stack.py` covers this with the real client.

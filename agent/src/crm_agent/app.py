@@ -1,5 +1,6 @@
+import asyncio
 from collections.abc import Callable
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Literal
 
@@ -34,6 +35,38 @@ def _bearer(authorization: str | None) -> str:
     if scheme.lower() != "bearer" or not token.strip():
         raise HTTPException(status_code=401, detail="Missing bearer token")
     return token.strip()
+
+
+async def _open_in_task(cm):
+    """Enter an async context in its own task so it is closed from that same task.
+
+    The MCP session uses anyio cancel scopes, which must be exited by the task that entered them,
+    but the request handler and the streaming response run in different tasks.
+    """
+    ready = asyncio.get_running_loop().create_future()
+    done = asyncio.Event()
+
+    async def hold():
+        try:
+            async with cm as value:
+                ready.set_result(value)
+                await done.wait()
+        except Exception as exc:
+            if not ready.done():
+                ready.set_exception(exc)
+
+    task = asyncio.create_task(hold())
+
+    async def close():
+        done.set()
+        with suppress(Exception):
+            await task
+
+    return await ready, close
+
+
+async def _noop():
+    pass
 
 
 def create_app(
@@ -94,16 +127,16 @@ def create_app(
         if (body.message is None) == (body.resume is None):
             raise HTTPException(status_code=422, detail="Send exactly one of message or resume")
 
-        stack = AsyncExitStack()
+        close = _noop
         headers = {"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}
         media = "application/x-ndjson"
         try:
-            tools = await stack.enter_async_context(opener(settings, token))
+            tools, close = await _open_in_task(opener(settings, token))
             agent = build_agent(model or settings.model, tools, deps["checkpointer"])
             config = {"configurable": {"thread_id": body.thread_id}, "recursion_limit": 100}
             pending = bool((await agent.aget_state(config)).interrupts)
         except Exception as exc:
-            await stack.aclose()
+            await close()
             error = f"{type(exc).__name__}: {exc}"[:200]
 
             async def failed():
@@ -113,10 +146,10 @@ def create_app(
             return StreamingResponse(failed(), media_type=media, headers=headers)
 
         if body.resume is not None and not pending:
-            await stack.aclose()
+            await close()
             raise HTTPException(status_code=409, detail="No pending interrupt to resume")
         if body.message is not None and pending:
-            await stack.aclose()
+            await close()
             raise HTTPException(status_code=409, detail="Resolve the pending interrupt first")
 
         if body.resume is not None:
@@ -132,7 +165,7 @@ def create_app(
                 async for line in stream_ndjson(agent, graph_input, config):
                     yield line
             finally:
-                await stack.aclose()
+                await close()
 
         return StreamingResponse(body_stream(), media_type=media, headers=headers)
 

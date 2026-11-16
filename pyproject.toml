@@ -15,6 +15,7 @@ dev = ["httpx", "pytest", "pytest-asyncio", "ruff"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = ["agent/tests"]
 markers = ["es: needs a running Elasticsearch (ES_URL)"]
 testpaths = ["tests", "mock_api/tests", "gateway/tests", "agent/tests"]
 
