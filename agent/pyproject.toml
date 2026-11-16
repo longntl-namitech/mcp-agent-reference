@@ -1,0 +1,33 @@
+[project]
+name = "crm-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "deepagents>=0.7.37",
+    "fastapi>=0.162.5",
+    "langchain>=1.5.0",
+    "langchain-mcp-adapters>=0.3.2",
+    "langchain-openai>=1.7.4",
+    "langgraph>=1.2.21",
+    "langgraph-dynamic-tool-binding",
+    "mcp>=1.24,<2",
+    "pydantic-settings>=2.16.2",
+    "uvicorn>=0.54.0",
+]
+
+[project.optional-dependencies]
+es = [
+    "elasticsearch[async]>=9.5.1",
+    "langgraph-checkpoint-elasticsearch",
+]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "crm_agent"
+
+[tool.uv.sources]
+langgraph-dynamic-tool-binding = { git = "https://github.com/longntl-namitech/langgraph-dynamic-tool-binding", rev = "e1aeca59c4406bb5825b0575b0dd6241373904a9" }
+langgraph-checkpoint-elasticsearch = { git = "https://github.com/longntl-namitech/langgraph-checkpoint-elasticsearch", rev = "v0.1.0" }

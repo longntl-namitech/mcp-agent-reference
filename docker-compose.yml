@@ -1,0 +1,43 @@
+services:
+  mock_api:
+    build:
+      context: .
+      dockerfile: Dockerfile.mock_api
+    ports:
+      - "8002:8002"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    environment:
+      API_BASE_URL: http://mock_api:8002
+      GATEWAY_SECRET: ${GATEWAY_SECRET:-change-me}
+    ports:
+      - "8001:8001"
+    depends_on:
+      - mock_api
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    environment:
+      GATEWAY_URL: http://gateway:8001/mcp
+      GATEWAY_SECRET: ${GATEWAY_SECRET:-change-me}
+      MODEL: ${MODEL:-openai:gpt-5.4-nano}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - gateway
+
+  es:
+    profiles: ["es"]
+    image: elasticsearch:9.5.5
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
